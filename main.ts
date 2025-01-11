@@ -1,5 +1,12 @@
-import { App, Editor, MarkdownView, Modal, Notice, Menu, Plugin, PluginSettingTab, SuggestModal, Setting, TFile, Vault } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Menu, Plugin, PluginSettingTab, SuggestModal, Setting, TFile, Vault , PluginManifest} from 'obsidian';
 import { fromPath } from "pdf2pic";
+import * as fs from 'fs';
+import { WriteImageResponse } from 'pdf2pic/dist/types/convertResponse';
+import { getPages } from 'pdf2pic/src/utils';
+//import gm from 'gm';
+import { Graphics } from 'pdf2pic/src/utils/graphics';
+import { createReadStream, ReadStream } from 'fs';
+
 
 // Remember to rename these classes and interfaces!
 
@@ -13,19 +20,20 @@ const DEFAULT_SETTINGS: ConvertPluginSettings = {
 
 export default class ConvertPlugin extends Plugin {
 	settings: ConvertPluginSettings;
-
+    private statusDisplay: StatusDisplay | null = null;
 	async onload() {
 		await this.loadSettings();
+		this.statusDisplay = StatusDisplay.getInstance(this.app, this.manifest);
 
 		this.addRibbonIcon('file-down', 'Import PDF as image', (event) => {
-			new FileModal(this.app).open();
+			new FileModal(this.app,this).open();
 		});
 
 		this.addCommand({
 			id: "obsidian-pdf-to-images",
 			name: "Import PDF as images to current file",
 			callback: () => {
-				new FileModal(this.app).open();
+				new FileModal(this.app,this).open();
 			}
 		})
 
@@ -49,10 +57,267 @@ export default class ConvertPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
+	
+    startConversion(pdfFile : TFile, currentDoc:TFile)	{
+			
+		const currentDocFilePath: string = this.extractPath(currentDoc);
+		
+		
+		if (this.statusDisplay) {
+			// Beispiel: Fortschritt aktualisieren
+			this.statusDisplay.initializeStatusBar();
+			this.statusDisplay.updatePageStatus(70, 100);
+		}
+		
+		const uri = this.app.vault.getResourcePath(pdfFile);
+		const split = uri.split("/");
+		let filepath = "";
+		let imgfolderpath = "";
+		
+		for (let i = 3; i < split.length - 1; i++) {
+			filepath += split[i] + "/";
+		}
+		
+		if (filepath.includes(currentDocFilePath)) {
+			imgfolderpath = filepath;
+			new Notice(`Aktuelle Notiz: ${currentDocFilePath}`);
+		} 
+		else {
+			new Notice(`Pdf nicht im Notizverzeichnis:`);
+			const newPdfFilepath = this.toAbsolutePath(currentDocFilePath + "Pdfs/");
+			this.ensDirSync(newPdfFilepath);
+			imgfolderpath = newPdfFilepath;
+			this.copyPdftoDir(filepath + pdfFile.name, newPdfFilepath + pdfFile.name);
+		}
+		
+			imgfolderpath = imgfolderpath.replace("/Pdfs", "") + "Imgs/";
+			imgfolderpath = imgfolderpath + pdfFile.basename + "/";
+			filepath = decodeURI(filepath + pdfFile.name);
+			imgfolderpath = decodeURI(imgfolderpath);
+			this.ensDirSync(imgfolderpath);
+			
+		
+			// Asynchrone Konvertierung starten und aktuelle Datei übergeben
+			this.convertPdfToImages(filepath,imgfolderpath,pdfFile.basename, currentDoc);
+
+			if (this.statusDisplay) {
+				this.statusDisplay.removeStatusBars();
+			}
+	}
+
+
+
+	async convertPdfToImages(pdfFilePath: string,imgFolderPath: string,imgFilename:string, docFile: TFile | null): Promise<void> {
+
+		const baseOptions = {
+			density: 600, 
+			preserveAspectRatio: true,
+			format: "jpeg",
+			saveFilename: imgFilename,
+			savePath: imgFolderPath,
+		};
+
+		try {
+
+
+			this.fetchPdfPages(pdfFilePath)
+			.then(pages => console.log('Seitenanzahl:', pages))
+			.catch(err => console.error('Fehler:', err));
+			const totalPages = 2; // Ersetzen durch tatsächliche Logik, um Seitenanzahl zu ermitteln
+			const imagesList: { name: string; path: string }[] = []; // Typ für Bildinformationen
+	
+			// Fortschrittstracker initialisieren
+			let processedPages = 0;
+			
+			// Jede Seite einzeln konvertieren
+			for (let i = 0; i < totalPages; i++) {
+				const currentPage = i + 1; // Seitenzahlen sind 1-basiert
+				new Notice(`Konvertiere Seite ${currentPage}/${totalPages}...`);
+	
+				const convert = fromPath(pdfFilePath, baseOptions);
+	
+				// Konvertiere die aktuelle Seite
+				const convertedPage = await convert(currentPage, { responseType: "image" })
+					.then(resolve => resolve)
+					.catch(error => {
+						throw new Error(`Fehler beim Konvertieren der Seite ${currentPage}: ${error.message}`);
+					});
+	
+				if (!convertedPage) {
+					throw new Error(`Seite ${currentPage} konnte nicht konvertiert werden.`);
+				}
+	
+				// Ergebnis speichern
+				if (convertedPage.name && convertedPage.path) {
+					imagesList.push({
+						name: convertedPage.name,
+						path: convertedPage.path,
+					});
+				} else {
+					throw new Error(`Ungültige Bilddaten für Seite ${currentPage}`);
+				}
+				// Fortschritt aktualisieren
+				processedPages += 1;
+				new Notice(`Fortschritt: ${processedPages}/${totalPages} Seiten konvertiert`);
+			}
+	
+			// Prüfen, ob Ergebnisse vorhanden sind
+			if (imagesList.length === 0) {
+				throw new Error("Keine Seiten aus PDF extrahiert.");
+			}
+	
+			new Notice(`Konvertiert ${imagesList.length} Seiten`);
+	
+			// Bilder in der ursprünglichen Datei einfügen
+			await this.app.vault.process(this.ensTFile(docFile), (data: string) => {
+				imagesList.forEach((f) => {
+					data += `\n![[${f.name}|1000]]`;
+				});
+				return data;
+			});
+	
+			new Notice(`Erfolgreich ${imagesList.length} Seiten importiert.`);
+		} catch (err) {
+			new Notice("Fehler bei der Konvertierung: " + err.message);
+		}
+	}
+
+	async copyPdftoDir(sourceFilePath: string, targetFilePath: string): Promise<void> {
+		try {
+			const relSourcePath = this.toRelativePath(sourceFilePath);
+			const relTargetPath = this.toRelativePath(targetFilePath);
+
+			// Prüfen, ob die PDFs existieren
+			if (!await this.app.vault.adapter.exists(relSourcePath)) {
+				new Notice(`Fehler: Die PDF ${relSourcePath} existiert nicht.`);
+				return;
+			}
+			if (await this.app.vault.adapter.exists(relTargetPath)) {
+				new Notice(`Warnung: Die PDF ${relTargetPath} existiert bereits.`);
+				return;
+			}	 
+		
+			// Verzeichnis erstellen, falls nötig
+			const targetDir = relTargetPath.substring(0, relTargetPath.lastIndexOf('/'));
+			await this.app.vault.adapter.mkdir(targetDir);
+	
+			// PDF-Datei kopieren
+			const pdfData = await this.app.vault.adapter.readBinary(relSourcePath);
+			await this.app.vault.adapter.writeBinary(relTargetPath, pdfData);
+
+			new Notice(`PDF erfolgreich nach ${relTargetPath} kopiert.`);
+		} catch (error) {
+			new Notice(`Fehler beim Kopieren: ${error.message}`);
+		}
+	}	 
+
+	async fetchPdfPages(pdfPath: string): Promise<number[]> {
+		const readStream = createReadStream(pdfPath);
+		const gmInstance = new Graphics();
+		//const gmInstance = gm(readStream);
+	
+		try {
+			const pages = await getPages(gmInstance, readStream);
+			new Notice(`PDF Seiten: ${pages}`);
+			return pages;
+		} catch (error) {
+			console.error('Fehler beim Abrufen der Seiten:', error);
+			throw error;
+		}
+	}
+
+	inDocFolder(docPath:string,filepath:string)	{
+		if (filepath.includes(docPath)) {
+		//	new Notice(`Pdf bereits im Notizverzeichnis`);
+		} 
+		else {
+			new Notice(`Pdf nicht im Notizverzeichnis`);
+			return false;
+		}
+	}
+
+	normalizePath(path: string): string {
+		return path.replace(/\\/g, '/');
+	}
+    extractPath(extractionFile :TFile): string	{
+		let rawPath: string = this.app.vault.getResourcePath(extractionFile);
+		rawPath = rawPath.replace(/^app:\/\/[^/]+\//, '');
+		rawPath = rawPath.substring(0, rawPath.lastIndexOf('/') + 1);
+		return this.toAbsolutePath(rawPath);
+	}
+    isRelativePath(path: string): boolean {
+		// Prüft, ob der Pfad mit '/' (Linux/Mac) oder 'C:/' (Windows) beginnt
+		return !/^(\/|[a-zA-Z]:[\\/])/.test(path);
+	}
+
+	toRelativePath(path: string): string {
+		let relPath = this.normalizePath(path);
+	
+		if (this.isRelativePath(relPath)) {
+			return relPath;
+		}
+	
+		if (relPath !== decodeURI(relPath)) {
+			relPath = decodeURI(relPath);
+		}
+		//@ts-ignore
+		const vaultPath = this.normalizePath(this.app.vault.adapter.basePath);
+	
+		return relPath.replace(vaultPath + '/', '');
+	}
+    
+    toAbsolutePath(path:string): string {
+		let absPath = this.normalizePath(path);
+
+		if(!this.isRelativePath(absPath)) {
+			return absPath;
+		} 
+		if(absPath !== decodeURI(absPath))  {
+			absPath = decodeURI(absPath);     
+		}
+		//@ts-ignore
+		const vaultPath = this.normalizePath(this.app.vault.adapter.basePath);
+		absPath = (vaultPath + absPath);
+		return absPath;
+	}
+    
+	ensDirSync(path: string): void {
+		const dirPath: string = this.toAbsolutePath(path);
+		
+		try {
+			if (!fs.existsSync(dirPath)) {
+				fs.mkdirSync(dirPath, { recursive: true });
+			// new Notice(`Verzeichnis erstellt: ${dirPath}`);
+			} else {
+			// new Notice(`Verzeichnis existiert bereits: ${dirPath}`);
+			}
+		} catch (error) {
+			if (error instanceof Error) {
+				new Notice(`Fehler beim Erstellen des Verzeichnisses: ${error.message}`);
+				console.error(`Fehler beim Erstellen des Verzeichnisses: ${error.message}`);
+			}
+		}
+	}
+	ensTFile(file: TFile | null): TFile {
+		if (file === null) {
+			throw new Error("Expected a TFile, but got null");
+		}
+		return file;
+	}
+
+
 }
 
 
 export class FileModal extends SuggestModal<TFile> {
+    private convertPlugin: ConvertPlugin;
+
+    constructor(app: App, convertPlugin: ConvertPlugin) {
+        super(app);
+        this.convertPlugin = convertPlugin;
+    }
+   // private statusDisplay: StatusDisplay = StatusDisplay.getInstance(this.app, this.manifest);
+
 	getSuggestions(query: string): TFile[] | Promise<TFile[]> {
 		return this.app.vault.getFiles().filter(t => {
 			return t.extension.toLowerCase() == "pdf" && t.name.toLowerCase().includes(query.toLowerCase());
@@ -63,24 +328,38 @@ export class FileModal extends SuggestModal<TFile> {
 		el.createEl("div", {text: value.name});
 		el.createEl("small", {text: value.path});
 	}
-	onChooseSuggestion(item: TFile, evt: MouseEvent | KeyboardEvent) {
-		const baseOptions = {
-			density: 100, 
-			preserveAspectRatio: true,
-			format: "jpeg",
-			saveFilename: item.basename,
-			savePath: "",
+
+	onChooseSuggestion(pdfFile: TFile, evt: MouseEvent | KeyboardEvent) {
+		const openNote: TFile | null = this.app.workspace.getActiveViewOfType(MarkdownView)?.file || null;
+		if (!openNote) {
+			new Notice("Keine aktive Notiz gefunden.");
+			return;
 		}
+		this.convertPlugin.startConversion(pdfFile,openNote);
+
+		// Aktives Markdown-Dokument abrufen
+		//const currentDoc :TFile | null = this.app.workspace.getActiveViewOfType(MarkdownView).file;
+		
+	}
+	
+}
+
+
+
+/*
+
 		const uri = this.app.vault.getResourcePath(item);
 		const split = uri.split('/');
-		var filepath = '';
-		var savepath = '';
+		let filepath = '';
+		let savepath = '';
 		for(let i = 3; i < split.length - 1; i++) {
 			filepath += split[i] + "/";
 		}
 
 		savepath = decodeURI(filepath);
 		filepath = decodeURI(filepath + item.name);
+        
+        
 
 		baseOptions.savePath = savepath; 
 		const convert = fromPath(filepath, baseOptions).bulk(-1);
@@ -98,6 +377,124 @@ export class FileModal extends SuggestModal<TFile> {
 				
 			}
 		})
+*/
+
+export class StatusDisplay extends Plugin {
+	private statusBarItemStat: HTMLElement | null = null;
+	private statusBarItemProg: HTMLElement | null = null;
+	private progressBar: HTMLElement | null = null;
+	private progressContainer: HTMLElement | null = null;
+    private static instance: StatusDisplay | null = null;
+
+	static getInstance(app: App, manifest: PluginManifest): StatusDisplay {
+		if (!this.instance) {
+			this.instance = new StatusDisplay(app, manifest);
+		}
+		return this.instance;
+	}
+
+	initializeStatusBar() {
+		// Erstes StatusBar-Item erstellen
+		this.statusBarItemStat = this.addStatusBarItem();
+		this.statusBarItemProg = this.addStatusBarItem();
+	
+		if (!this.statusBarItemStat || !this.statusBarItemProg) {
+			new Notice('Fehler: StatusBar-Item konnte nicht erstellt werden.');
+			return;
+		}
+		
+		this.statusBarItemStat.setText('Bereit');
+		this.statusBarItemStat.style.width = '100%';
+		this.statusBarItemStat.style.height = '20px';
+		this.statusBarItemStat.style.position = 'relative';
+	
+		this.statusBarItemProg.style.width = '100%';
+		this.statusBarItemProg.style.height = '20px';
+		this.statusBarItemProg.style.position = 'relative';
+	
+		// Fortschrittsbalken für das zweite StatusBar-Item
+  
+		// Container für den Fortschrittsbalken (mit dem Rahmen)
+		this.progressContainer = document.createElement('div');
+		this.progressContainer.style.width = '100%';  // Container hat immer 100% der Breite
+		this.progressContainer.style.height = '9px';  // Höhe des Containers
+		this.progressContainer.style.border = '2px solid var(--color-accent)';  // Lila Rahmen
+		this.progressContainer.style.borderRadius = '5px';  // Abgerundete Ecken (optional)
+		this.progressContainer.style.position = 'relative';
+  
+		// Fortschrittsbalken erstellen
+		this.progressBar = document.createElement('div');
+		this.progressBar.style.height = '100%';  // Der Balken nimmt die ganze Höhe des Containers ein
+		this.progressBar.style.width = '0%';  // Startwert des Balkens (bei 0%)
+		this.progressBar.style.backgroundColor = 'var(--color-accent)';  // Fortschrittsfarbe
+		this.progressContainer.style.borderRadius = '5px';
+		this.progressBar.style.position = 'absolute';  // Der Balken ist absolut innerhalb des Containers
+  
+		// Füge den Fortschrittsbalken dem Container hinzu
+		this.progressContainer.appendChild(this.progressBar);
+  
+		// Füge den Container zur Statusbar hinzu
+		this.statusBarItemProg.appendChild(this.progressContainer);
+  
+	
+		// Beispielaufruf für das Update der ProgressBar
+		this.updatePageStatus(2,100);
+	}
+
+		// Funktion zum Aktualisieren der ProgressBar
+	updateProgressBar(percentage:number) {
+		// Stelle sicher, dass der Prozentsatz im Bereich von 0 bis 100 liegt
+		percentage = Math.max(0, Math.min(100, percentage));  // Korrektur auf 0-100%
+		
+		// Aktualisiere die Breite des Fortschrittsbalkens
+		if (this.progressBar) {
+			this.progressBar.style.width = `${percentage}%`; // Setze die Breite des Fortschrittsbalkens
+		}
+	}
+
+	updateStatusBar(currentPage:number,totalPages:number) {
+		//this.progressBar.style.width = `${percentage}%`;
+		if (this.statusBarItemStat) {
+			this.statusBarItemStat.innerHTML = `Seite<br>${currentPage} / ${totalPages}`;
+		}
+	}
+  
+	updatePageStatus(currentPage:number,totalPages:number)  {
+		if(!(currentPage<=totalPages)) {
+			return;
+		}
+		const percentage = Math.round((currentPage / totalPages) * 100);
+		this.updateStatusBar(currentPage,totalPages);
+		this.updateProgressBar(percentage);
+	}
+  
+  
+	hideStatusBars() {
+		if (this.statusBarItemStat) {
+			this.statusBarItemStat.style.display = 'none'; // Komplett aus dem Layout entfernen
+		// Oder: this.statusBarItemStat.style.visibility = 'hidden'; // Verstecken, aber Platz im Layout behalten
+		}
+	
+		if (this.statusBarItemProg) {
+			this.statusBarItemProg.style.display = 'none';
+		// Oder: this.statusBarItemProg.style.visibility = 'hidden';
+		}
+	}
+
+	removeStatusBars() {
+		if (this.statusBarItemStat) {
+			this.statusBarItemStat.remove();
+			this.statusBarItemStat = null; // Verweis entfernen
+		}
+	
+		if (this.statusBarItemProg) {
+			this.statusBarItemProg.remove();
+			this.statusBarItemProg = null; // Verweis entfernen
+		}
+	}
+
+	showStatusBars() {
+		this.initializeStatusBar();
 	}
 
 }
