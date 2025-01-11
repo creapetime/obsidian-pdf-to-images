@@ -1,15 +1,14 @@
 import { App, Editor, MarkdownView, Modal, Notice, Menu, Plugin, PluginSettingTab, SuggestModal, Setting, TFile, Vault , PluginManifest} from 'obsidian';
-import { fromPath } from "pdf2pic";
+//import { fromPath } from "pdf2pic";
+import { fromPath } from 'pdf2picfork';
+import { ConvertPluginSettings, DEFAULT_SETTINGS } from './src/settings';
 import * as fs from 'fs';
-import { WriteImageResponse } from 'pdf2pic/dist/types/convertResponse';
-import { getPages } from 'pdf2pic/src/utils';
-//import gm from 'gm';
-import { Graphics } from 'pdf2pic/src/utils/graphics';
-import { createReadStream, ReadStream } from 'fs';
+//import { WriteImageResponse } from 'pdf2pic/dist/types/convertResponse';
+//import { createReadStream, ReadStream } from 'fs';
 
 
 // Remember to rename these classes and interfaces!
-
+/*
 interface ConvertPluginSettings {
 	mySetting: string;
 }
@@ -17,12 +16,20 @@ interface ConvertPluginSettings {
 const DEFAULT_SETTINGS: ConvertPluginSettings = {
 	mySetting: 'default'
 }
-
+*/
 export default class ConvertPlugin extends Plugin {
 	settings: ConvertPluginSettings;
     private statusDisplay: StatusDisplay | null = null;
 	async onload() {
 		await this.loadSettings();
+		this.addSettingTab(new ConvertPluginSettingTab(this.app, this));
+		if (this.settings.myOption) {
+			new Notice('Die Option ist aktiviert!');
+		}
+
+    // Einstellungs-Tab hinzufügen
+    this.addSettingTab(new ConvertPluginSettingTab(this.app, this));
+
 		this.statusDisplay = StatusDisplay.getInstance(this.app, this.manifest);
 
 		this.addRibbonIcon('file-down', 'Import PDF as image', (event) => {
@@ -53,7 +60,6 @@ export default class ConvertPlugin extends Plugin {
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
-
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
@@ -62,12 +68,6 @@ export default class ConvertPlugin extends Plugin {
 			
 		const currentDocFilePath: string = this.extractPath(currentDoc);
 		
-		
-		if (this.statusDisplay) {
-			// Beispiel: Fortschritt aktualisieren
-			this.statusDisplay.initializeStatusBar();
-			this.statusDisplay.updatePageStatus(70, 100);
-		}
 		
 		const uri = this.app.vault.getResourcePath(pdfFile);
 		const split = uri.split("/");
@@ -118,21 +118,31 @@ export default class ConvertPlugin extends Plugin {
 		};
 
 		try {
+			const converterinfo = fromPath(pdfFilePath, baseOptions);
 
+			// Seiteninformationen abrufen
+			const info = await converterinfo.info();
+			const totalPages = info.length;
+			new Notice(`Gesamtseiten: ${totalPages}`);
+			
 
-			this.fetchPdfPages(pdfFilePath)
-			.then(pages => console.log('Seitenanzahl:', pages))
-			.catch(err => console.error('Fehler:', err));
-			const totalPages = 2; // Ersetzen durch tatsächliche Logik, um Seitenanzahl zu ermitteln
+			
+			// Ersetzen durch tatsächliche Logik, um Seitenanzahl zu ermitteln
 			const imagesList: { name: string; path: string }[] = []; // Typ für Bildinformationen
 	
 			// Fortschrittstracker initialisieren
-			let processedPages = 0;
+			//let processedPages = 0;
+
 			
+			if (this.statusDisplay) {
+				// Beispiel: Fortschritt aktualisieren
+				this.statusDisplay.initializeStatusBar();
+				this.statusDisplay.updatePageStatus(0, totalPages);
+			}
 			// Jede Seite einzeln konvertieren
 			for (let i = 0; i < totalPages; i++) {
 				const currentPage = i + 1; // Seitenzahlen sind 1-basiert
-				new Notice(`Konvertiere Seite ${currentPage}/${totalPages}...`);
+				//new Notice(`Konvertiere Seite ${currentPage}/${totalPages}...`);
 	
 				const convert = fromPath(pdfFilePath, baseOptions);
 	
@@ -153,12 +163,15 @@ export default class ConvertPlugin extends Plugin {
 						name: convertedPage.name,
 						path: convertedPage.path,
 					});
+					if (this.statusDisplay) {
+						this.statusDisplay.updatePageStatus(currentPage, totalPages);
+					}
 				} else {
 					throw new Error(`Ungültige Bilddaten für Seite ${currentPage}`);
 				}
 				// Fortschritt aktualisieren
-				processedPages += 1;
-				new Notice(`Fortschritt: ${processedPages}/${totalPages} Seiten konvertiert`);
+				//processedPages += 1;
+				//new Notice(`Fortschritt: ${processedPages}/${totalPages} Seiten konvertiert`);
 			}
 	
 			// Prüfen, ob Ergebnisse vorhanden sind
@@ -166,7 +179,7 @@ export default class ConvertPlugin extends Plugin {
 				throw new Error("Keine Seiten aus PDF extrahiert.");
 			}
 	
-			new Notice(`Konvertiert ${imagesList.length} Seiten`);
+			//new Notice(`Konvertiert ${imagesList.length} Seiten`);
 	
 			// Bilder in der ursprünglichen Datei einfügen
 			await this.app.vault.process(this.ensTFile(docFile), (data: string) => {
@@ -210,21 +223,6 @@ export default class ConvertPlugin extends Plugin {
 			new Notice(`Fehler beim Kopieren: ${error.message}`);
 		}
 	}	 
-
-	async fetchPdfPages(pdfPath: string): Promise<number[]> {
-		const readStream = createReadStream(pdfPath);
-		const gmInstance = new Graphics();
-		//const gmInstance = gm(readStream);
-	
-		try {
-			const pages = await getPages(gmInstance, readStream);
-			new Notice(`PDF Seiten: ${pages}`);
-			return pages;
-		} catch (error) {
-			console.error('Fehler beim Abrufen der Seiten:', error);
-			throw error;
-		}
-	}
 
 	inDocFolder(docPath:string,filepath:string)	{
 		if (filepath.includes(docPath)) {
@@ -305,7 +303,6 @@ export default class ConvertPlugin extends Plugin {
 		return file;
 	}
 
-
 }
 
 
@@ -343,7 +340,47 @@ export class FileModal extends SuggestModal<TFile> {
 	}
 	
 }
+class ConvertPluginSettingTab extends PluginSettingTab {
+	plugin: ConvertPlugin;
+  
+	constructor(app: App, plugin: ConvertPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+  
+	display(): void {
+		const { containerEl } = this;
+  
+		containerEl.empty(); // Alte Inhalte entfernen
+		containerEl.createEl('h2', { text: 'Einstellungen für mein Plugin' });
+  
+		// Beispiel: Umschalten einer Option
+		new Setting(containerEl)
+		.setName('Meine Option')
+		.setDesc('Eine Beschreibung der Option.')
+		.addToggle((toggle) =>
+			toggle
+			.setValue(this.plugin.settings.myOption) // Aktueller Wert
+			.onChange(async (value) => {
+				this.plugin.settings.myOption = value; // Wert aktualisieren
+				await this.plugin.saveSettings(); // Speichern
+			})
+		);
 
+		// Weitere Option (anotherOption)
+		new Setting(containerEl)
+		.setName('Eine weitere Option')
+		.setDesc('Gib einen Wert für diese Option ein.')
+		.addText((text) =>
+		text
+		.setValue(this.plugin.settings.anotherOption) // Aktueller Wert
+		.onChange(async (value) => {
+			this.plugin.settings.anotherOption = value; // Wert aktualisieren
+			await this.plugin.saveSettings(); // Speichern
+		})
+		);
+	}
+  }
 
 
 /*
@@ -483,18 +520,16 @@ export class StatusDisplay extends Plugin {
 
 	removeStatusBars() {
 		if (this.statusBarItemStat) {
+			this.statusBarItemStat.style.display = 'none';
 			this.statusBarItemStat.remove();
 			this.statusBarItemStat = null; // Verweis entfernen
 		}
 	
 		if (this.statusBarItemProg) {
+			this.statusBarItemProg.style.display = 'none';
 			this.statusBarItemProg.remove();
 			this.statusBarItemProg = null; // Verweis entfernen
 		}
-	}
-
-	showStatusBars() {
-		this.initializeStatusBar();
 	}
 
 }
