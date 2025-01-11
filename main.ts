@@ -1,7 +1,8 @@
 import { App, Editor, MarkdownView, Modal, Notice, Menu, Plugin, PluginSettingTab, SuggestModal, Setting, TFile, Vault , PluginManifest} from 'obsidian';
 //import { fromPath } from "pdf2pic";
 import { fromPath } from 'pdf2picfork';
-import { ConvertPluginSettings, DEFAULT_SETTINGS } from './src/settings';
+//import { Options } from 'pdf2picfork/src/types/options';
+import { ConvertSettings, DEFAULT_SETTINGS } from './src/utils/settings';
 import * as fs from 'fs';
 //import { WriteImageResponse } from 'pdf2pic/dist/types/convertResponse';
 //import { createReadStream, ReadStream } from 'fs';
@@ -18,19 +19,16 @@ const DEFAULT_SETTINGS: ConvertPluginSettings = {
 }
 */
 export default class ConvertPlugin extends Plugin {
-	settings: ConvertPluginSettings;
+	convertSettings: ConvertSettings;
+	//private convertOptions = defaultOptions;
     private statusDisplay: StatusDisplay | null = null;
+
+	
 	async onload() {
+
 		await this.loadSettings();
 		this.addSettingTab(new ConvertPluginSettingTab(this.app, this));
-		if (this.settings.myOption) {
-			new Notice('Die Option ist aktiviert!');
-		}
 
-    // Einstellungs-Tab hinzufügen
-    this.addSettingTab(new ConvertPluginSettingTab(this.app, this));
-
-		this.statusDisplay = StatusDisplay.getInstance(this.app, this.manifest);
 
 		this.addRibbonIcon('file-down', 'Import PDF as image', (event) => {
 			new FileModal(this.app,this).open();
@@ -43,6 +41,8 @@ export default class ConvertPlugin extends Plugin {
 				new FileModal(this.app,this).open();
 			}
 		})
+
+		this.statusDisplay = StatusDisplay.getInstance(this.app, this.manifest);
 
 		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
 		// Using this function will automatically remove the event listener when this plugin is disabled.
@@ -58,10 +58,10 @@ export default class ConvertPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.convertSettings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 	async saveSettings() {
-		await this.saveData(this.settings);
+		await this.saveData(this.convertSettings);
 	}
 	
     startConversion(pdfFile : TFile, currentDoc:TFile)	{
@@ -80,7 +80,7 @@ export default class ConvertPlugin extends Plugin {
 		
 		if (filepath.includes(currentDocFilePath)) {
 			imgfolderpath = filepath;
-			new Notice(`Aktuelle Notiz: ${currentDocFilePath}`);
+			//new Notice(`Aktuelle Notiz: ${currentDocFilePath}`);
 		} 
 		else {
 			new Notice(`Pdf nicht im Notizverzeichnis:`);
@@ -108,17 +108,28 @@ export default class ConvertPlugin extends Plugin {
 
 
 	async convertPdfToImages(pdfFilePath: string,imgFolderPath: string,imgFilename:string, docFile: TFile | null): Promise<void> {
+/*
+		convertOptions.quality = 600;
+		convertOptions.format = "jpeg"
+		convertOptions.saveFilename = imgFilename;
+		convertOptions.savePath: imgFolderPath;
+		convertOptions.preserveAspectRatio: true;
 
-		const baseOptions = {
+		this.convertOptions = {
+			quality: 100,
 			density: 600, 
 			preserveAspectRatio: true,
 			format: "jpeg",
 			saveFilename: imgFilename,
 			savePath: imgFolderPath,
-		};
+			compression: "None",
+		};*/
+		this.convertSettings.saveFilename = imgFilename;
+		this.convertSettings.savePath = imgFolderPath;
+
 
 		try {
-			const converterinfo = fromPath(pdfFilePath, baseOptions);
+			const converterinfo = fromPath(pdfFilePath, this.convertSettings);
 
 			// Seiteninformationen abrufen
 			const info = await converterinfo.info();
@@ -144,7 +155,7 @@ export default class ConvertPlugin extends Plugin {
 				const currentPage = i + 1; // Seitenzahlen sind 1-basiert
 				//new Notice(`Konvertiere Seite ${currentPage}/${totalPages}...`);
 	
-				const convert = fromPath(pdfFilePath, baseOptions);
+				const convert = fromPath(pdfFilePath, this.convertSettings);
 	
 				// Konvertiere die aktuelle Seite
 				const convertedPage = await convert(currentPage, { responseType: "image" })
@@ -184,12 +195,17 @@ export default class ConvertPlugin extends Plugin {
 			// Bilder in der ursprünglichen Datei einfügen
 			await this.app.vault.process(this.ensTFile(docFile), (data: string) => {
 				imagesList.forEach((f) => {
-					data += `\n![[${f.name}|1000]]`;
+					data += `\n![[${f.name}|${this.convertSettings.importsize}]]`;
 				});
 				return data;
 			});
-	
-			new Notice(`Erfolgreich ${imagesList.length} Seiten importiert.`);
+
+			if (imagesList.length === totalPages)	{
+				new Notice(`Konvertierung Erfolgreich`);
+			}
+			else	{
+				throw new Error(`Nicht alle Seiten wurden erfolgreich konvertiert. Es Fehlen ${(totalPages - imagesList.length)} Seiten`);
+			}
 		} catch (err) {
 			new Notice("Fehler bei der Konvertierung: " + err.message);
 		}
@@ -351,37 +367,177 @@ class ConvertPluginSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
   
-		containerEl.empty(); // Alte Inhalte entfernen
-		containerEl.createEl('h2', { text: 'Einstellungen für mein Plugin' });
+		containerEl.empty(); 
+		containerEl.createEl('h2', { text: 'Konvertierungseinstellungen' });
   
-		// Beispiel: Umschalten einer Option
+		// Option: quality
 		new Setting(containerEl)
-		.setName('Meine Option')
-		.setDesc('Eine Beschreibung der Option.')
-		.addToggle((toggle) =>
-			toggle
-			.setValue(this.plugin.settings.myOption) // Aktueller Wert
+		.setName('Quality')
+		.setDesc('Bildkompressionslevel von 0 bis 100')
+		.addText((text) => text
+			.setPlaceholder('0-100')
+			.setValue(this.plugin.convertSettings.quality.toString())
 			.onChange(async (value) => {
-				this.plugin.settings.myOption = value; // Wert aktualisieren
-				await this.plugin.saveSettings(); // Speichern
+				const number = parseInt(value);
+				if (!isNaN(number) && number >= 0 && number <= 100) {
+					this.plugin.convertSettings.quality = number; 
+					await this.plugin.saveSettings();
+				} 
+				else {
+					new Notice('Bitte gib eine gültige Zahl zwischen 0 und 100 ein.'); 
+				}
 			})
 		);
 
-		// Weitere Option (anotherOption)
+		// Setting: density
 		new Setting(containerEl)
-		.setName('Eine weitere Option')
-		.setDesc('Gib einen Wert für diese Option ein.')
-		.addText((text) =>
-		text
-		.setValue(this.plugin.settings.anotherOption) // Aktueller Wert
-		.onChange(async (value) => {
-			this.plugin.settings.anotherOption = value; // Wert aktualisieren
-			await this.plugin.saveSettings(); // Speichern
-		})
+		.setName('Density')
+		.setDesc('Pixeldichte in DPI von 0 bis 1200')
+		.addText((text) => text
+			.setPlaceholder('0-1200')
+			.setValue(this.plugin.convertSettings.density.toString()) 
+			.onChange(async (value) => {
+				const number = parseInt(value);
+				if (!isNaN(number) && number >= 0 && number <= 1200) {
+					this.plugin.convertSettings.density = number; 
+					await this.plugin.saveSettings();
+				} 
+				else {
+					new Notice('Bitte gib eine gültige Zahl zwischen 0 und 100 ein.'); 
+				}
+			})
 		);
-	}
-  }
 
+		// Setting: width
+		new Setting(containerEl)
+		.setName('Breite')
+		.setDesc('Bildbreite in Pixel')
+		.addText((text) => text
+			.setPlaceholder('0-3072')
+			.setValue(this.plugin.convertSettings.width.toString()) 
+			.onChange(async (value) => {
+				const number = parseInt(value);
+				if (!isNaN(number) && number >= 0 && number <= 3072) {
+					this.plugin.convertSettings.width = number; 
+					await this.plugin.saveSettings();
+				} 
+				else {
+					new Notice('Bitte gib eine gültige Zahl zwischen 0 und 3072 ein.');
+				}
+			})
+		);
+		// Setting: height
+		new Setting(containerEl)
+		.setName('Höhe')
+		.setDesc('Bildhöhe in Pixel')
+		.addText((text) => text
+			.setPlaceholder('0-2048')
+			.setValue(this.plugin.convertSettings.height.toString()) 
+			.onChange(async (value) => {
+				const number = parseInt(value);
+				if (!isNaN(number) && number >= 0 && number <= 2048) {
+					this.plugin.convertSettings.height = number; 
+					await this.plugin.saveSettings();
+				} 
+				else {
+					new Notice('Bitte gib eine gültige Zahl zwischen 0 und 2048 ein.'); 
+				}
+			})
+		);
+
+		// Setting: preserveAspectRatio
+		new Setting(containerEl)
+		.setName('Seitenverhältnis beibehalten')
+		.setDesc('Behält das Seitenverhältnis des Bildes bei. Höhe und Breite werden als Mindestbreite bzw. Mindesthöhe interpretiert.')
+		.addToggle((toggle) =>
+			toggle
+			.setValue(this.plugin.convertSettings.preserveAspectRatio) 
+			.onChange(async (value) => {
+				this.plugin.convertSettings.preserveAspectRatio = value; 
+				await this.plugin.saveSettings(); 
+			})
+		);
+
+
+		// Setting: format
+		new Setting(containerEl)
+            .setName("Bildformat")
+            .setDesc("Wähle ein Bildformat aus der Liste aus.")
+            .addDropdown((dropdown) => {
+                const formats = [
+                    "PNG",
+                    "JPEG",
+                    "BMP",
+                    "TIFF",
+                    "WebP",
+                    "HEIF",
+                    "SVG",
+                    "EPS"
+                ];
+
+                formats.forEach((format) => dropdown.addOption(format, format.toLowerCase()));
+                dropdown.setValue(this.plugin.convertSettings.format.toUpperCase());
+                dropdown.onChange((formatValue) => {
+					this.plugin.convertSettings.format = formatValue; 
+					this.plugin.saveSettings(); 
+
+				});
+			}
+		);
+
+		// Setting: compression
+		new Setting(containerEl)
+            .setName("Kompressionsformat wählen")
+            .setDesc("Wähle ein Kompressionsformat aus der Liste aus.")
+            .addDropdown((dropdown) => {
+                const formats = [
+                    "None",
+                    "BZip",
+                    "Fax",
+                    "Group3",
+                    "Group4",
+                    "JPEG",
+                    "Lossless",
+                    "LZW",
+                    "RLE",
+                    "Zip",
+                    "LZMA",
+                    "JPEG2000",
+                    "JBIG",
+                    "JBIG2",
+                    "WebP",
+                    "ZSTD"
+                ];
+       
+                formats.forEach((format) => dropdown.addOption(format, format.toLowerCase()));
+                dropdown.setValue(this.plugin.convertSettings.compression.toUpperCase());
+                dropdown.onChange((formatValue) => {
+                    this.plugin.convertSettings.compression = formatValue; // Speichere die valide Zahl
+					this.plugin.saveSettings(); 
+                });
+            });
+
+		// Setting: importsize
+		new Setting(containerEl)
+			.setName('Importgröße')
+			.setDesc('Größe mit der das Bild in die Notiz importiert wird ')
+			.addText((text) => text
+				.setPlaceholder('0-5000')
+				.setValue(this.plugin.convertSettings.importsize.toString()) 
+				.onChange(async (value) => {
+					const number = parseInt(value);
+					if (!isNaN(number) && number >= 0 && number <= 5000) {
+						this.plugin.convertSettings.importsize = number; 
+						await this.plugin.saveSettings();
+					} 
+					else {
+						new Notice('Bitte gib eine gültige Zahl zwischen 0 und 5000 ein.'); 
+					}
+				})
+			);
+	
+  }
+}
 
 /*
 
