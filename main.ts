@@ -46,10 +46,10 @@ export default class ConvertPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.convertSettings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 	async saveSettings() {
-		await this.saveData(this.settings);
+		await this.saveData(this.convertSettings);
 	}
 
 }
