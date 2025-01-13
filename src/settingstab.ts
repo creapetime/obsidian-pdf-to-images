@@ -6,9 +6,10 @@ import ConvertPlugin  from '../main';
 export class SettingsTab extends PluginSettingTab {
     plugin: ConvertPlugin;
     settings: ConvertSettings
-    constructor(app: App, plugin: ConvertPlugin) {
+    constructor( plugin: ConvertPlugin, app: App, settings: ConvertSettings ) {
         super(app, plugin);
         this.plugin = plugin;
+        this.settings = settings;
     }
     display(): void {
         const { containerEl } = this;

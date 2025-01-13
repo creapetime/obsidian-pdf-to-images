@@ -14,7 +14,7 @@ export default class ConvertPlugin extends Plugin {
 	async onload() {
 
 		await this.loadSettings();
-		this.addSettingTab(new SettingsTab(this.app, this));
+		this.addSettingTab(new SettingsTab(this , this.app, this.settings));
 		this.converter =  new Converter(this.app, this.manifest);
 		this.statusDisplay = StatusDisplay.getInstance(this.app, this.manifest);
 
