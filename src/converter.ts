@@ -1,5 +1,5 @@
-import { Notice, Plugin, TFile } from 'obsidian';
-
+import { App,  Notice, Plugin, PluginManifest, TFile } from 'obsidian';
+import ConvertPlugin  from '../main';
 import { fromPath } from 'pdf2picfork';
 import { StatusDisplay } from './statusdisplay';
 import { ConvertSettings } from './settings';
@@ -10,13 +10,20 @@ import * as path from 'path';
 export class Converter extends Plugin   {
     convertSettings: ConvertSettings;
     futils: FileUtilities;
+    plugin: ConvertPlugin;
     //private convertOptions = defaultOptions;
     private statusDisplay: StatusDisplay | null = null;
     copyPdfFolderPath : string;
     copyImgFolderPath : string;
     pdfFolderPath: string;
     imgFolderPath: string;
-
+    constructor( plugin: ConvertPlugin, manifest:PluginManifest, app: App , settings: ConvertSettings ,futils : FileUtilities,statusdisplay :StatusDisplay) {
+        super(app,manifest);
+        this.plugin = plugin;
+        this.convertSettings = settings;
+        this.futils = futils;
+        this.statusDisplay = statusdisplay;
+    }
 
     async startConversion(pdfFile : TFile,openNote:TFile)	{
         try	{
@@ -41,14 +48,17 @@ export class Converter extends Plugin   {
         this.pdfFolderPath = this.futils.extractPath(pdfFile);
 
         this.imgFolderPath = this.convertSettings.copyImgs ? currentDocFolderPath : this.pdfFolderPath;
-        this.imgFolderPath = this.convertSettings.imgSafeFolder ? path.normalize(this.imgFolderPath.concat(this.convertSettings.imgSafeFolder , "/")) : this.imgFolderPath;
+        this.imgFolderPath = this.convertSettings.imgSaveFolder ? path.normalize(this.imgFolderPath.concat(this.convertSettings.imgSaveFolder , "/")) : this.imgFolderPath;
+        this.copyImgFolderPath = this.imgFolderPath;
         this.imgFolderPath = this.convertSettings.bundleImgFiles ? path.normalize(this.imgFolderPath.concat(pdfFile.basename + "/")) : this.imgFolderPath;
     
 
         this.copyPdfFolderPath = this.convertSettings.copyPdf ? currentDocFolderPath : "";
         this.copyPdfFolderPath = this.convertSettings.pdfSaveFolder && this.convertSettings.copyPdf ? path.normalize(this.copyPdfFolderPath.concat(this.convertSettings.pdfSaveFolder , "/")) : this.copyPdfFolderPath;
 
-        this.copyImgFolderPath = this.convertSettings.copyImgs ? this.pdfFolderPath : this.copyImgFolderPath;
+       // this.copyImgFolderPath = this.convertSettings.copyImgs ? currentDocFolderPath : "";
+        //this.copyimgFolderPath = this.convertSettings.copyImgs ? this.pdfFolderPath : this.copyImgFolderPath;
+       // this.copyImgFolderPath = this.convertSettings.imgSaveFolder && this.convertSettings.copyImgs ? path.normalize(this.copyImgFolderPath.concat(this.convertSettings.imgSaveFolder , "/")) : this.copyImgFolderPath;
 
         new Notice(`PdfFolderPath: ${currentDocFolderPath}`);
         new Notice(`PdfFolderPath: ${this.pdfFolderPath}`);
@@ -58,6 +68,8 @@ export class Converter extends Plugin   {
         this.copyPdfFolderPath && this.futils.ensDirSync(this.copyPdfFolderPath);
         this.copyImgFolderPath && this.futils.ensDirSync(this.copyImgFolderPath);
         
+        this.hideFolders()
+
         await this.convertPdfToImages((this.pdfFolderPath + pdfFile.name),this.imgFolderPath,pdfFile.basename, currentDoc);
         
     }
@@ -142,4 +154,35 @@ export class Converter extends Plugin   {
             throw new Error("Fehler bei der Konvertierung: " + err.message);
         }
     }
+
+    hideFolders()   {
+        this.copyPdfFolderPath && this.futils.ensDirSync(this.copyPdfFolderPath);
+        this.copyImgFolderPath && this.futils.ensDirSync(this.copyImgFolderPath);
+        
+        if(this.convertSettings.hidePdfSaveFolder && this.convertSettings.copyPdf)  {
+            this.futils.initVisibilityByPath(this.copyPdfFolderPath,true,false,false);
+            new Notice(`Pdf Folder will be hided: ${this.copyPdfFolderPath}`);
+           // const savePath = this.futils.normalizeSlashes(this.futils.toRelativePath(this.copyPdfFolderPath),false);
+           // new Notice(`Savepath: ${savePath}`);
+            this.plugin.setVisibilitySetting(this.copyPdfFolderPath,true,false,false);
+            this.plugin.saveSettings();
+        }
+        if(this.convertSettings.hideImgSaveFolder)  {
+            new Notice(`Img Folder will be hided: ${this.imgFolderPath}`);
+            this.futils.initVisibilityByPath(this.copyImgFolderPath,false,true,false);
+            this.plugin.setVisibilitySetting(this.copyImgFolderPath,false,true,false);
+            this.plugin.saveSettings();
+        }
+
+
+
+
+
+
+    }
+
+
+
+
+
 }

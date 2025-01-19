@@ -1,15 +1,19 @@
 import { App, Notice, PluginSettingTab, Setting } from 'obsidian';
 import { ConvertSettings } from './settings';
 import ConvertPlugin  from '../main';
+import { FileUtilities } from './fileutils';
 
 
 export class SettingsTab extends PluginSettingTab {
     plugin: ConvertPlugin;
-    settings: ConvertSettings
-    constructor( plugin: ConvertPlugin, app: App, settings: ConvertSettings ) {
+    settings: ConvertSettings;
+    futils: FileUtilities;
+
+    constructor( plugin: ConvertPlugin, app: App, settings: ConvertSettings , futils: FileUtilities ) {
         super(app, plugin);
         this.plugin = plugin;
         this.settings = settings;
+        this.futils = futils
     }
     display(): void {
         const { containerEl } = this;
@@ -224,13 +228,30 @@ export class SettingsTab extends PluginSettingTab {
             .setDesc('Name für einen optionalen Unterordner in welchen die Bilddatein gespeichert werden')
             .addText((text) => text
                 .setPlaceholder('Ordnername')
-                .setValue(this.settings.imgSafeFolder.toString())
+                .setValue(this.settings.imgSaveFolder.toString())
                 .onChange(async (value) => {
-                    this.settings.imgSafeFolder = this.sanitizeFolderName(value); 
+                    this.settings.imgSaveFolder = this.sanitizeFolderName(value); 
                     await this.plugin.saveSettings();
                 })
             );
-
+        new Setting(containerEl)
+            .setName('Bilder Speicherordner verstecken')
+            .setDesc('entfernt alle Bilder Speicherordner aus der Seitenleiste')
+            .addToggle((toggle) =>
+                toggle
+                .setValue(this.settings.hideImgSaveFolder) 
+                .onChange(async (value) => {
+                    this.settings.hideImgSaveFolder = value;
+                    if(value)   {
+                        this.settings.visibleImgFolders = this.futils.getFoldersAttributes("data-path",false,true,!value);
+                    }
+                    else{
+                        this.settings.hiddenImgFolders = this.futils.getFoldersAttributes("data-path",false,true,value);
+                    }
+                    this.futils.setVisibilityByAttributes(false,true,!value,value);
+                    await this.plugin.saveSettings(); 
+                })
+            );
         //Setting: copyPdf	
         new Setting(containerEl)
             .setName('Pdf kopieren')
@@ -272,13 +293,41 @@ export class SettingsTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
+            .setName('Pdf Speicherordner verstecken')
+            .setDesc('entfernt den Pdf Speicherordner aus der Seitenleiste')
+            .addToggle((toggle) =>
+                toggle
+                .setValue(this.settings.hidePdfSaveFolder) 
+                .onChange(async (value) => {
+                    this.settings.hidePdfSaveFolder = value;
+                    if(value)   {
+                        this.settings.visiblePdfFolders = this.futils.getFoldersAttributes("data-path",true,false,!value);
+                    }
+                    else{
+                        this.settings.hiddenPdfFolders = this.futils.getFoldersAttributes("data-path",true,false,value);
+                    }
+                    this.futils.setVisibilityByAttributes(true,false,!value,value);
+                    await this.plugin.saveSettings(); 
+                })
+            );
+        new Setting(containerEl)
+            .setName('Einträge löschen für Pdf Speicherordner')
+            .setDesc('zeigt alle Pdf Speicherordner wieder an und löscht alle Einträge aus dem Vault')
+            .addButton((button) =>
+              button
+                .setButtonText('Versteckte Ordner anzeigen') // Text des Buttons
+                .onClick(() => {
+                  // Hier kommt die Funktion, die beim Klicken auf den Button ausgeführt wird
+                })
+            );
+        new Setting(containerEl)
             .setName('Seiten Bündeln')
             .setDesc('Bündelt alle Bilddatein eines Pdf Dokuments in einem eigenen Ordner')
             .addToggle((toggle) =>
                 toggle
                 .setValue(this.settings.bundleImgFiles) 
                 .onChange(async (value) => {
-                    this.settings.bundleImgFiles = value; 
+                    this.settings.hideImgSaveFolder = value; 
                     await this.plugin.saveSettings(); 
                 })
             );
